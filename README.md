@@ -41,8 +41,9 @@ pool is stale or the fee payer is running low, so a red run is the alert.
 
 - GitHub disables scheduled workflows on repos with no commits for 60 days. Push something
   occasionally, or re-enable it under Actions when you get the notice.
-- If a crank is interrupted mid-way, the next run finishes it: `--stale-only` skips validators
-  already updated this epoch.
+- A full crank is ~400 transactions sent without waiting, and the CLI aborts on the first
+  preflight error from the RPC. The workflow retries up to 6 times; `--stale-only` makes each
+  retry resume with only the validators not yet updated this epoch. Same applies across runs.
 - Manual crank from a laptop, if ever needed:
 
   ```bash

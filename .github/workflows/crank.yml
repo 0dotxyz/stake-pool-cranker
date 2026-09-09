@@ -56,14 +56,25 @@ jobs:
       # The CLI loads staker/manager/token-owner signers at startup even for `update`,
       # defaulting to ~/.config/solana/id.json which doesn't exist on a runner.
       # Point them all at the fee payer; `update` never signs with them.
+      #
+      # A full crank is ~400 transactions fired without waiting. The CLI aborts on the
+      # first preflight hiccup from the RPC, so retry: --stale-only resumes where it stopped.
       - name: Update stake pool
         run: |
           KP="$RUNNER_TEMP/fee-payer.json"
-          spl-stake-pool \
-            --url "$RPC_URL" \
-            --fee-payer "$KP" --staker "$KP" --manager "$KP" --token-owner "$KP" \
-            --with-compute-unit-price "$COMPUTE_UNIT_PRICE" \
-            update "$STAKE_POOL" --stale-only
+          for attempt in 1 2 3 4 5 6; do
+            if spl-stake-pool \
+                 --url "$RPC_URL" \
+                 --fee-payer "$KP" --staker "$KP" --manager "$KP" --token-owner "$KP" \
+                 --with-compute-unit-price "$COMPUTE_UNIT_PRICE" \
+                 update "$STAKE_POOL" --stale-only; then
+              exit 0
+            fi
+            echo "::warning::update attempt $attempt failed, retrying in 15s"
+            sleep 15
+          done
+          echo "::error::update failed after 6 attempts"
+          exit 1
         env:
           RPC_URL: ${{ secrets.RPC_URL }}
 

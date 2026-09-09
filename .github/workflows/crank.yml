@@ -1,0 +1,67 @@
+name: crank
+
+on:
+  schedule:
+    - cron: "0 * * * *" # hourly; a no-op run costs ~30s of Actions time
+  workflow_dispatch:
+
+concurrency:
+  group: crank
+  cancel-in-progress: false
+
+env:
+  STAKE_POOL: DqhH94PjkZsjAqEze2BEkWhFQJ6EyU6MdtMphMgnXqeK
+  CLI_VERSION: 2.0.1
+  # microlamports per compute unit. 50_000 * 200k CU = 0.01 SOL priority per tx worst case,
+  # in practice ~0.005 SOL per full crank of ~400 txs.
+  COMPUTE_UNIT_PRICE: ${{ vars.COMPUTE_UNIT_PRICE || '50000' }}
+  MIN_FEE_PAYER_SOL: ${{ vars.MIN_FEE_PAYER_SOL || '0.2' }}
+
+jobs:
+  crank:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore spl-stake-pool CLI from cache
+        id: cli-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/spl-stake-pool
+          key: spl-stake-pool-cli-${{ env.CLI_VERSION }}-${{ runner.os }}
+
+      - name: Build spl-stake-pool CLI (cache miss only, ~8 min)
+        if: steps.cli-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq pkg-config libssl-dev libudev-dev protobuf-compiler
+          cargo install spl-stake-pool-cli --version "$CLI_VERSION" --locked
+
+      - name: Write fee payer keypair
+        run: |
+          umask 077
+          printf '%s' "$FEE_PAYER_KEYPAIR" > "$RUNNER_TEMP/fee-payer.json"
+        env:
+          FEE_PAYER_KEYPAIR: ${{ secrets.FEE_PAYER_KEYPAIR }}
+
+      - name: Update stake pool
+        run: |
+          spl-stake-pool \
+            --url "$RPC_URL" \
+            --fee-payer "$RUNNER_TEMP/fee-payer.json" \
+            --with-compute-unit-price "$COMPUTE_UNIT_PRICE" \
+            update "$STAKE_POOL" --stale-only
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+
+      - name: Verify pool is current and fee payer is funded
+        if: always()
+        run: python3 check.py
+        env:
+          RPC_URL: ${{ secrets.RPC_URL }}
+          FEE_PAYER_KEYPAIR: ${{ secrets.FEE_PAYER_KEYPAIR }}
+
+      - name: Remove keypair
+        if: always()
+        run: rm -f "$RUNNER_TEMP/fee-payer.json"

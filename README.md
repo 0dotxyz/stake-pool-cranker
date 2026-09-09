@@ -46,6 +46,11 @@ pool is stale or the fee payer is running low, so a red run is the alert.
 - Manual crank from a laptop, if ever needed:
 
   ```bash
-  spl-stake-pool --url "$RPC_URL" --fee-payer fee-payer.json --with-compute-unit-price 50000 \
+  spl-stake-pool --url "$RPC_URL" \
+    --fee-payer fee-payer.json --staker fee-payer.json --manager fee-payer.json --token-owner fee-payer.json \
+    --with-compute-unit-price 50000 \
     update DqhH94PjkZsjAqEze2BEkWhFQJ6EyU6MdtMphMgnXqeK --stale-only
   ```
+
+  The extra signer flags are needed because the CLI opens all four at startup; `update` only
+  ever signs with the fee payer.

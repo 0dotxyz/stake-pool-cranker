@@ -26,7 +26,7 @@ jobs:
 
       - name: Restore spl-stake-pool CLI from cache
         id: cli-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cargo/bin/spl-stake-pool
           key: spl-stake-pool-cli-${{ env.CLI_VERSION }}-${{ runner.os }}
@@ -38,6 +38,14 @@ jobs:
           sudo apt-get install -y -qq pkg-config libssl-dev libudev-dev protobuf-compiler
           cargo install spl-stake-pool-cli --version "$CLI_VERSION" --locked
 
+      # Save the binary even if the crank below fails, so a bad run never costs the 8 min build again.
+      - name: Save spl-stake-pool CLI to cache
+        if: steps.cli-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cargo/bin/spl-stake-pool
+          key: spl-stake-pool-cli-${{ env.CLI_VERSION }}-${{ runner.os }}
+
       - name: Write fee payer keypair
         run: |
           umask 077
@@ -45,11 +53,15 @@ jobs:
         env:
           FEE_PAYER_KEYPAIR: ${{ secrets.FEE_PAYER_KEYPAIR }}
 
+      # The CLI loads staker/manager/token-owner signers at startup even for `update`,
+      # defaulting to ~/.config/solana/id.json which doesn't exist on a runner.
+      # Point them all at the fee payer; `update` never signs with them.
       - name: Update stake pool
         run: |
+          KP="$RUNNER_TEMP/fee-payer.json"
           spl-stake-pool \
             --url "$RPC_URL" \
-            --fee-payer "$RUNNER_TEMP/fee-payer.json" \
+            --fee-payer "$KP" --staker "$KP" --manager "$KP" --token-owner "$KP" \
             --with-compute-unit-price "$COMPUTE_UNIT_PRICE" \
             update "$STAKE_POOL" --stale-only
         env:

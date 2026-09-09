@@ -88,3 +88,15 @@ jobs:
       - name: Remove keypair
         if: always()
         run: rm -f "$RUNNER_TEMP/fee-payer.json"
+
+      # Optional: add a SLACK_WEBHOOK_URL secret (Slack app -> Incoming Webhooks) to get pinged
+      # on any red run. Does nothing until the secret exists.
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -z "$SLACK_WEBHOOK_URL" ] && { echo "no SLACK_WEBHOOK_URL set, skipping"; exit 0; }
+          curl -sS -X POST -H 'Content-type: application/json' "$SLACK_WEBHOOK_URL" \
+            --data "$(printf '{"text":":rotating_light: stake-pool-cranker run failed (pool stale or fee payer low). %s"}' "$RUN_URL")"

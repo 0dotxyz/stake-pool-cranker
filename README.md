@@ -37,6 +37,15 @@ pool is stale or the fee payer is running low, so a red run is the alert.
 | `COMPUTE_UNIT_PRICE` | `50000` | priority fee in microlamports per compute unit |
 | `MIN_FEE_PAYER_SOL` | `0.2` | `check.py` fails below this balance |
 
+Observed cost: ~0.003 SOL per epoch (~400 transactions), so roughly 0.05 SOL per month.
+A 0.5 SOL fee payer lasts about 10 months; the default threshold gives ~2 months of warning.
+
+## Alerts
+
+A red run emails the repo owner by default. For Slack, add a repository secret
+`SLACK_WEBHOOK_URL` (Slack app → Incoming Webhooks); failed runs then post a message with a
+link to the run. No secret, no message.
+
 ## Gotchas
 
 - GitHub disables scheduled workflows on repos with no commits for 60 days. Push something

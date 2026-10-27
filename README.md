@@ -35,10 +35,11 @@ pool is stale or the fee payer is running low, so a red run is the alert.
 | Variable | Default | Meaning |
 |---|---|---|
 | `COMPUTE_UNIT_PRICE` | `50000` | priority fee in microlamports per compute unit |
+| `COMPUTE_UNIT_LIMIT` | `200000` | compute unit limit set on every transaction |
 | `MIN_FEE_PAYER_SOL` | `0.2` | `check.py` fails below this balance |
 
-Observed cost: ~0.003 SOL per epoch (~400 transactions), so roughly 0.05 SOL per month.
-A 0.5 SOL fee payer lasts about 10 months; the default threshold gives ~2 months of warning.
+Expected cost: ~0.006 SOL per epoch (~400 transactions), so roughly 0.1 SOL per month.
+A 0.5 SOL fee payer lasts about 5 months; the default threshold gives ~2 months of warning.
 
 ## Alerts
 
@@ -51,8 +52,13 @@ link to the run. No secret, no message.
 - GitHub disables scheduled workflows on repos with no commits for 60 days. Push something
   occasionally, or re-enable it under Actions when you get the notice.
 - A full crank is ~400 transactions sent without waiting, and the CLI aborts on the first
-  preflight error from the RPC. The workflow retries up to 6 times; `--stale-only` makes each
-  retry resume with only the validators not yet updated this epoch. Same applies across runs.
+  preflight error from the RPC. The workflow retries up to 6 times with growing backoff
+  (30s up to 5 min); `--stale-only` makes each retry resume with only the validators not yet
+  updated this epoch. Same applies across runs.
+- The compute unit limit is static on purpose. Without it the CLI simulates every transaction
+  and uses the result as the limit, but it ignores simulation errors: when the RPC is
+  struggling (as it often is right after an epoch boundary), that limit comes back as 0 and
+  every transaction fails with `exceeded CUs meter`.
 - Manual crank from a laptop, if ever needed:
 
   ```bash

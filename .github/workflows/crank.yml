@@ -12,9 +12,13 @@ concurrency:
 env:
   STAKE_POOL: DqhH94PjkZsjAqEze2BEkWhFQJ6EyU6MdtMphMgnXqeK
   CLI_VERSION: 2.0.1
-  # microlamports per compute unit. 50_000 * 200k CU = 0.01 SOL priority per tx worst case,
-  # in practice ~0.005 SOL per full crank of ~400 txs.
+  # microlamports per compute unit. 50_000 * 200k CU = 10_000 lamports priority per tx,
+  # so ~0.006 SOL per full crank of ~400 txs including base fees.
   COMPUTE_UNIT_PRICE: ${{ vars.COMPUTE_UNIT_PRICE || '50000' }}
+  # Static, so the CLI skips its per-tx simulation: it ignores simulation errors and, when the
+  # RPC is struggling (epoch boundaries), sets a limit of 0 and every tx fails preflight.
+  # Observed peaks: ~57k CU per validator update, ~86k for the final pool balance update.
+  COMPUTE_UNIT_LIMIT: ${{ vars.COMPUTE_UNIT_LIMIT || '200000' }}
   MIN_FEE_PAYER_SOL: ${{ vars.MIN_FEE_PAYER_SOL || '0.2' }}
 
 jobs:
@@ -59,21 +63,28 @@ jobs:
       #
       # A full crank is ~400 transactions fired without waiting. The CLI aborts on the
       # first preflight hiccup from the RPC, so retry: --stale-only resumes where it stopped.
+      # Backoff grows to ~12.5 min in total: RPC trouble at an epoch boundary outlasts quick retries.
       - name: Update stake pool
         run: |
           KP="$RUNNER_TEMP/fee-payer.json"
-          for attempt in 1 2 3 4 5 6; do
+          attempt=0
+          for backoff in 30 60 120 240 300 ""; do
+            attempt=$((attempt + 1))
             if spl-stake-pool \
                  --url "$RPC_URL" \
                  --fee-payer "$KP" --staker "$KP" --manager "$KP" --token-owner "$KP" \
                  --with-compute-unit-price "$COMPUTE_UNIT_PRICE" \
+                 --with-compute-unit-limit "$COMPUTE_UNIT_LIMIT" \
                  update "$STAKE_POOL" --stale-only; then
               exit 0
             fi
-            echo "::warning::update attempt $attempt failed, retrying in 15s"
-            sleep 15
+            if [ -z "$backoff" ]; then
+              break
+            fi
+            echo "::warning::update attempt $attempt failed, retrying in ${backoff}s"
+            sleep "$backoff"
           done
-          echo "::error::update failed after 6 attempts"
+          echo "::error::update failed after $attempt attempts"
           exit 1
         env:
           RPC_URL: ${{ secrets.RPC_URL }}

@@ -11,14 +11,9 @@ concurrency:
 
 env:
   STAKE_POOL: DqhH94PjkZsjAqEze2BEkWhFQJ6EyU6MdtMphMgnXqeK
-  CLI_VERSION: 2.0.1
-  # microlamports per compute unit. 50_000 * 200k CU = 10_000 lamports priority per tx,
-  # so ~0.006 SOL per full crank of ~400 txs including base fees.
+  # microlamports per compute unit. crank.py asks ~195k CU per 11-validator tx, so 50_000
+  # is ~10_000 lamports priority per tx: ~0.003 SOL per full crank of ~185 txs with base fees.
   COMPUTE_UNIT_PRICE: ${{ vars.COMPUTE_UNIT_PRICE || '50000' }}
-  # Static, so the CLI skips its per-tx simulation: it ignores simulation errors and, when the
-  # RPC is struggling (epoch boundaries), sets a limit of 0 and every tx fails preflight.
-  # Observed peaks: ~57k CU per validator update, ~86k for the final pool balance update.
-  COMPUTE_UNIT_LIMIT: ${{ vars.COMPUTE_UNIT_LIMIT || '200000' }}
   MIN_FEE_PAYER_SOL: ${{ vars.MIN_FEE_PAYER_SOL || '0.2' }}
 
 jobs:
@@ -26,68 +21,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - name: Restore spl-stake-pool CLI from cache
-        id: cli-cache
-        uses: actions/cache/restore@v4
+      - uses: actions/setup-python@v7
         with:
-          path: ~/.cargo/bin/spl-stake-pool
-          key: spl-stake-pool-cli-${{ env.CLI_VERSION }}-${{ runner.os }}
+          python-version: "3.12"
+          cache: pip
 
-      - name: Build spl-stake-pool CLI (cache miss only, ~8 min)
-        if: steps.cli-cache.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq pkg-config libssl-dev libudev-dev protobuf-compiler
-          cargo install spl-stake-pool-cli --version "$CLI_VERSION" --locked
+      - name: Install dependencies
+        run: pip install -q -r requirements.txt
 
-      # Save the binary even if the crank below fails, so a bad run never costs the 8 min build again.
-      - name: Save spl-stake-pool CLI to cache
-        if: steps.cli-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ~/.cargo/bin/spl-stake-pool
-          key: spl-stake-pool-cli-${{ env.CLI_VERSION }}-${{ runner.os }}
-
-      - name: Write fee payer keypair
-        run: |
-          umask 077
-          printf '%s' "$FEE_PAYER_KEYPAIR" > "$RUNNER_TEMP/fee-payer.json"
-        env:
-          FEE_PAYER_KEYPAIR: ${{ secrets.FEE_PAYER_KEYPAIR }}
-
-      # The CLI loads staker/manager/token-owner signers at startup even for `update`,
-      # defaulting to ~/.config/solana/id.json which doesn't exist on a runner.
-      # Point them all at the fee payer; `update` never signs with them.
-      #
-      # A full crank is ~400 transactions fired without waiting. The CLI aborts on the
-      # first preflight hiccup from the RPC, so retry: --stale-only resumes where it stopped.
-      # Backoff grows to ~12.5 min in total: RPC trouble at an epoch boundary outlasts quick retries.
+      # Packs 11 validators per tx and retries per tx until the pool is current or the
+      # budget runs out. See crank.py for why it survives a flaky RPC.
       - name: Update stake pool
-        run: |
-          KP="$RUNNER_TEMP/fee-payer.json"
-          attempt=0
-          for backoff in 30 60 120 240 300 ""; do
-            attempt=$((attempt + 1))
-            if spl-stake-pool \
-                 --url "$RPC_URL" \
-                 --fee-payer "$KP" --staker "$KP" --manager "$KP" --token-owner "$KP" \
-                 --with-compute-unit-price "$COMPUTE_UNIT_PRICE" \
-                 --with-compute-unit-limit "$COMPUTE_UNIT_LIMIT" \
-                 update "$STAKE_POOL" --stale-only; then
-              exit 0
-            fi
-            if [ -z "$backoff" ]; then
-              break
-            fi
-            echo "::warning::update attempt $attempt failed, retrying in ${backoff}s"
-            sleep "$backoff"
-          done
-          echo "::error::update failed after $attempt attempts"
-          exit 1
+        run: python3 crank.py
         env:
           RPC_URL: ${{ secrets.RPC_URL }}
+          FEE_PAYER_KEYPAIR: ${{ secrets.FEE_PAYER_KEYPAIR }}
+          # 22 min fits the 30 min job timeout with room for check.py.
+          CRANK_BUDGET_SECONDS: 1320
 
       - name: Verify pool is current and fee payer is funded
         if: always()
@@ -95,10 +47,6 @@ jobs:
         env:
           RPC_URL: ${{ secrets.RPC_URL }}
           FEE_PAYER_KEYPAIR: ${{ secrets.FEE_PAYER_KEYPAIR }}
-
-      - name: Remove keypair
-        if: always()
-        run: rm -f "$RUNNER_TEMP/fee-payer.json"
 
       # Optional: add a SLACK_WEBHOOK_URL secret (Slack app -> Incoming Webhooks) to get pinged
       # on any red run. Does nothing until the secret exists.
